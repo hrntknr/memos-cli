@@ -1,0 +1,249 @@
+#!/bin/bash -eu
+set -o pipefail
+
+function _get_config() {
+  if [ ! -f $HOME/.config/memos/config.json ]; then
+    echo "Please login first."
+    exit 1
+  fi
+
+  cat $HOME/.config/memos/config.json
+}
+
+function finder() {
+  if type peco >/dev/null 2>&1; then
+    peco --on-cancel error
+  elif type fzf >/dev/null 2>&1; then
+    fzf
+  else
+    echo "Please install fzf or peco."
+    exit 1
+  fi
+}
+
+function _usage() {
+  cat <<EOF
+Usage: $(basename "$0") <subcommand> [<options>]
+Subcommands:
+  login           Login to the server
+  list            List memos
+  list_archived   List archived memos
+  archive         Archive a memo
+  archive <id>    Archive a memo with id
+  unarchive       Unarchive a memo
+  unarchive <id>  Unarchive a memo with id
+  delete          Delete a memo
+  delete <id>     Delete a memo with id
+  show            Show a memo
+  show <id>       Show a memo with id
+  edit            Edit a memo
+  edit <id>       Edit a memo with id (pipe or redirect supported)
+  new             Create a new memo (pipe or redirect supported)
+EOF
+}
+
+function login() {
+  read -p "Server: " server
+  read -p "Token: " token
+
+  me=$(curl -sf $server/api/v1/user/me -H "Authorization: Bearer $token")
+  if [ $? -ne 0 ]; then
+    echo "Login failed."
+    exit 1
+  fi
+  echo Logged in as $(echo $me | jq -r .nickname)
+
+  mkdir -p $HOME/.config/memos
+  jq -n --arg server "$server" --arg token "$token" \
+    '{"server": $server, "token": $token}' >$HOME/.config/memos/config.json
+}
+
+function list() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    exit 1
+  fi
+  chain=$1
+
+  list=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token")
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | finder | cut -f1)
+  $chain $id
+}
+
+function list_archived() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    exit 1
+  fi
+  chain=$1
+
+  list=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token")
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | finder | cut -f1)
+  $chain $id
+}
+
+function archive() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    list archive
+    exit 0
+  fi
+  id=$1
+
+  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "ARCHIVED"}')
+  echo "Archived memo $(echo $result | jq -r .id)"
+}
+
+function unarchive() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    list_archived unarchive
+    exit 0
+  fi
+  id=$1
+
+  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "NORMAL"}')
+  echo "Unarchived memo $(echo $result | jq -r .id)"
+}
+
+function delete() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    list delete
+    exit 0
+  fi
+  id=$1
+
+  curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XDELETE
+  echo "Deleted memo $id"
+}
+
+function show() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    list show
+    exit 0
+  fi
+  id=$1
+
+  content=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" | jq .content -r)
+  echo "$content"
+}
+
+function edit() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ $# -eq 0 ]; then
+    list edit
+    exit 0
+  fi
+  id=$1
+
+  if [ -t 0 ]; then
+    target=$(mktemp)
+    content=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" | jq .content -r)
+    echo "$content" >$target
+    ${EDITOR:-vi} $target
+    if diff -q $target <(echo "$content") >/dev/null; then
+      echo "No changes."
+      exit 1
+    fi
+  elif [ -p /dev/stdin ]; then
+    target=/dev/stdin
+  elif [ -f /dev/stdin ]; then
+    target=/dev/stdin
+  else
+    echo "Invalid stdin."
+    exit 1
+  fi
+
+  body=$(jq -n --arg content "$(cat $target)" '{"content": $content}')
+  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d "$body")
+  echo "Edited memo $(echo $result | jq -r .id)"
+
+  if [ -t 0 ]; then
+    rm $target
+  fi
+}
+
+function new() {
+  server=$(_get_config | jq -r .server)
+  token=$(_get_config | jq -r .token)
+
+  if [ -t 0 ]; then
+    target=$(mktemp)
+    ${EDITOR:-vi} $target
+    if [ ! -s $target ]; then
+      echo "Empty memo."
+      exit 1
+    fi
+  elif [ -p /dev/stdin ]; then
+    target=/dev/stdin
+  elif [ -f /dev/stdin ]; then
+    target=/dev/stdin
+  else
+    echo "Invalid stdin."
+    exit 1
+  fi
+
+  body=$(jq -n --arg content "$(cat $target)" '{"content": $content}')
+  result=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token" -XPOST -d "$body")
+  echo "Created memo $(echo $result | jq -r .id)"
+
+  if [ -t 0 ]; then
+    rm $target
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  _usage
+  exit 1
+fi
+subcommand=$1
+shift
+case $subcommand in
+login)
+  login
+  ;;
+list)
+  list show
+  ;;
+list_archived)
+  list_archived show
+  ;;
+archive)
+  archive $@
+  ;;
+unarchive)
+  unarchive $@
+  ;;
+delete)
+  delete $@
+  ;;
+show)
+  show $@
+  ;;
+edit)
+  edit $@
+  ;;
+new)
+  new
+  ;;
+*)
+  _usage
+  exit 1
+  ;;
+esac
