@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/bin/bash -e
 set -o pipefail
 
 function _get_config() {
@@ -10,7 +10,7 @@ function _get_config() {
   cat $HOME/.config/memos/config.json
 }
 
-function finder() {
+function _finder() {
   if type peco >/dev/null 2>&1; then
     peco --on-cancel error
   elif type fzf >/dev/null 2>&1; then
@@ -24,6 +24,11 @@ function finder() {
 function _usage() {
   cat <<EOF
 Usage: $(basename "$0") <subcommand> [<options>]
+Options:
+  -h, --help                         Print usage
+  -v, --verbose                      Print verbose messages
+  -t <tag>, --tag <tag>              Tag filter
+  -s <content>, --search <content>   Content filter
 Subcommands:
   login           Login to the server
   list            List memos
@@ -40,6 +45,15 @@ Subcommands:
   edit <id>       Edit a memo with id (pipe or redirect supported)
   new             Create a new memo (pipe or redirect supported)
 EOF
+}
+
+function _url_param() {
+  for tag in "${tags[@]}"; do
+    echo -n "&tag=$(echo -n "$tag" | jq -sRr @uri)"
+  done
+  for content in "${contents[@]}"; do
+    echo -n "&content=$(echo -n "$content" | jq -sRr @uri)"
+  done
 }
 
 function login() {
@@ -67,8 +81,8 @@ function list() {
   fi
   chain=$1
 
-  list=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token")
-  id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | finder | cut -f1)
+  list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | _finder | cut -f1)
   $chain $id
 }
 
@@ -81,8 +95,8 @@ function list_archived() {
   fi
   chain=$1
 
-  list=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token")
-  id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | finder | cut -f1)
+  list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | _finder | cut -f1)
   $chain $id
 }
 
@@ -208,42 +222,100 @@ function new() {
   fi
 }
 
-if [ $# -eq 0 ]; then
-  _usage
-  exit 1
-fi
-subcommand=$1
-shift
-case $subcommand in
-login)
-  login
-  ;;
-list)
-  list show
-  ;;
-list_archived)
-  list_archived show
-  ;;
-archive)
-  archive $@
-  ;;
-unarchive)
-  unarchive $@
-  ;;
-delete)
-  delete $@
-  ;;
-show)
-  show $@
-  ;;
-edit)
-  edit $@
-  ;;
-new)
-  new
-  ;;
-*)
-  _usage
-  exit 1
-  ;;
-esac
+verbose=0
+tags=()
+contents=()
+commands=()
+
+function parse_args() {
+  OPTIND=1
+  while getopts ":ht:s:v-:" OPT "$@"; do
+    if [ "$OPT" = "-" ]; then
+      OPT=${OPTARG%%=*}
+      if [[ $OPT == $OPTARG ]]; then
+        OPTARG=${!OPTIND}
+      else
+        OPTARG=${OPTARG#*=}
+      fi
+    fi
+    case $OPT in
+    tag | search)
+      OPTIND=$((OPTIND + 1))
+      ;;&
+    h | help)
+      _usage
+      exit 0
+      ;;
+    t | tag)
+      tags+=("$OPTARG")
+
+      ;;
+    s | search)
+      contents+=("$OPTARG")
+      ;;
+    v | verbose)
+      verbose=1
+      ;;
+    *)
+      _usage
+      exit 1
+      ;;
+    esac
+  done
+}
+
+function main() {
+  while [ $# -gt 0 ]; do
+    if [[ $1 == -* ]]; then
+      parse_args $@
+      shift $((OPTIND - 1))
+    else
+      commands+=("$1")
+      shift
+    fi
+  done
+
+  if [ $verbose -eq 1 ]; then
+    echo "tags: ${tags[@]}"
+    echo "contents: ${contents[@]}"
+    echo "commands: ${commands[@]}"
+    echo "url_param: $(_url_param)"
+    set -x
+  fi
+
+  case ${commands[0]} in
+  login)
+    login
+    ;;
+  list)
+    list show
+    ;;
+  list_archived)
+    list_archived show
+    ;;
+  archive)
+    archive ${commands[@]:1}
+    ;;
+  unarchive)
+    unarchive ${commands[@]:1}
+    ;;
+  delete)
+    delete ${commands[@]:1}
+    ;;
+  show)
+    show ${commands[@]:1}
+    ;;
+  edit)
+    edit ${commands[@]:1}
+    ;;
+  new)
+    new
+    ;;
+  *)
+    _usage
+    exit 1
+    ;;
+  esac
+}
+
+main $@
