@@ -11,7 +11,7 @@ function _get_config() {
 }
 
 function _finder() {
-  if [ -v FINDER ]; then
+  if [ ! -z "$FINDER" ]; then
     $FINDER
   elif type peco >/dev/null 2>&1; then
     peco --on-cancel error
@@ -61,6 +61,9 @@ function _url_param() {
 function login() {
   read -p "Server: " server
   read -p "Token: " token
+  if [[ $server == */ ]]; then
+    server=${server%/}
+  fi
 
   me=$(curl -sf $server/api/v1/user/me -H "Authorization: Bearer $token")
   if [ $? -ne 0 ]; then
@@ -234,26 +237,30 @@ function parse_args() {
   while getopts ":ht:s:v-:" OPT "$@"; do
     if [ "$OPT" = "-" ]; then
       OPT=${OPTARG%%=*}
-      if [[ $OPT == $OPTARG ]]; then
+      if [ $OPT == $OPTARG ]; then
         OPTARG=${!OPTIND}
       else
         OPTARG=${OPTARG#*=}
       fi
     fi
     case $OPT in
-    tag | search)
-      OPTIND=$((OPTIND + 1))
-      ;;&
     h | help)
       _usage
       exit 0
       ;;
-    t | tag)
+    t)
       tags+=("$OPTARG")
-
       ;;
-    s | search)
+    tag)
+      tags+=("$OPTARG")
+      OPTIND=$((OPTIND + 1))
+      ;;
+    s)
       contents+=("$OPTARG")
+      ;;
+    search)
+      contents+=("$OPTARG")
+      OPTIND=$((OPTIND + 1))
       ;;
     v | verbose)
       verbose=1
