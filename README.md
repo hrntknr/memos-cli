@@ -17,6 +17,11 @@ chmod +x /usr/local/bin/memo
 ## Usage
 ```
 Usage: memo <subcommand> [<options>]
+Options:
+  -h, --help                         Print usage
+  -v, --verbose                      Print verbose messages
+  -t <tag>, --tag <tag>              Tag filter
+  -s <content>, --search <content>   Content filter
 Subcommands:
   login           Login to the server
   list            List memos
@@ -29,7 +34,7 @@ Subcommands:
   delete <id>     Delete a memo with id
   show            Show a memo
   show <id>       Show a memo with id
-  edit            Edit a memo
+  edit            Edit a memo (pipe or redirect supported)
   edit <id>       Edit a memo with id (pipe or redirect supported)
   new             Create a new memo (pipe or redirect supported)
 ```
