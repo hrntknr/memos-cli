@@ -138,7 +138,7 @@ function delete() {
   fi
   id=$1
 
-  curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XDELETE
+  curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XDELETE >/dev/null
   echo "Deleted memo $id"
 }
 
