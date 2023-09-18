@@ -11,7 +11,9 @@ function _get_config() {
 }
 
 function _finder() {
-  if type peco >/dev/null 2>&1; then
+  if [ -v FINDER ]; then
+    $FINDER
+  elif type peco >/dev/null 2>&1; then
     peco --on-cancel error
   elif type fzf >/dev/null 2>&1; then
     fzf
@@ -82,7 +84,7 @@ function list() {
   chain=$1
 
   list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
-  id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | _finder | cut -f1)
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | _finder | head -n1 | cut -f1)
   $chain $id
 }
 
@@ -96,7 +98,7 @@ function list_archived() {
   chain=$1
 
   list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
-  id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | _finder | cut -f1)
+  id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | _finder | head -n1 | cut -f1)
   $chain $id
 }
 
