@@ -1,5 +1,16 @@
-#!/bin/bash -e
+#!/bin/bash -eE
 set -o pipefail
+
+function _curl() {
+  res=$(curl -sS -w "%{response_code}" "$@")
+  body=$(echo "$res" | head -n-1)
+  code=$(echo "$res" | tail -n1)
+  if [ $code -ne 200 ]; then
+    echo "Error: $(echo "$body" | jq -r .message)" >&2
+    exit 1
+  fi
+  echo "$body"
+}
 
 function _get_config() {
   if [ ! -f $HOME/.config/memos/config.json ]; then
@@ -65,11 +76,7 @@ function login() {
     server=${server%/}
   fi
 
-  me=$(curl -sf $server/api/v1/user/me -H "Authorization: Bearer $token")
-  if [ $? -ne 0 ]; then
-    echo "Login failed."
-    exit 1
-  fi
+  me=$(_curl $server/api/v1/user/me -H "Authorization: Bearer $token")
   echo Logged in as $(echo $me | jq -r .nickname)
 
   mkdir -p $HOME/.config/memos
@@ -86,7 +93,7 @@ function list() {
   fi
   chain=$1
 
-  list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
+  list=$(_curl $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
   id=$(echo $list | jq -r '.[] | select(.rowStatus == "NORMAL") | [.id, .content] | @tsv' | _finder | head -n1 | cut -f1)
   $chain $id
 }
@@ -100,7 +107,7 @@ function list_archived() {
   fi
   chain=$1
 
-  list=$(curl -sf $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
+  list=$(_curl $server/api/v1/memo?$(_url_param) -H "Authorization: Bearer $token")
   id=$(echo $list | jq -r '.[] | select(.rowStatus == "ARCHIVED") | [.id, .content] | @tsv' | _finder | head -n1 | cut -f1)
   $chain $id
 }
@@ -115,7 +122,7 @@ function archive() {
   fi
   id=$1
 
-  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "ARCHIVED"}')
+  result=$(_curl $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "ARCHIVED"}')
   echo "Archived memo $(echo $result | jq -r .id)"
 }
 
@@ -129,7 +136,7 @@ function unarchive() {
   fi
   id=$1
 
-  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "NORMAL"}')
+  result=$(_curl $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d '{"rowStatus": "NORMAL"}')
   echo "Unarchived memo $(echo $result | jq -r .id)"
 }
 
@@ -143,7 +150,7 @@ function delete() {
   fi
   id=$1
 
-  curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XDELETE >/dev/null
+  _curl $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XDELETE >/dev/null
   echo "Deleted memo $id"
 }
 
@@ -157,7 +164,8 @@ function show() {
   fi
   id=$1
 
-  content=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" | jq .content -r)
+  body=$(_curl $server/api/v1/memo/$id -H "Authorization: Bearer $token")
+  content=$(echo $body | jq -r .content)
   echo "$content"
 }
 
@@ -173,7 +181,8 @@ function edit() {
 
   if [ -t 0 ]; then
     target=$(mktemp)
-    content=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" | jq .content -r)
+    body=$(_curl $server/api/v1/memo/$id -H "Authorization: Bearer $token")
+    content=$(echo $body | jq -r .content)
     echo "$content" >$target
     ${EDITOR:-vi} $target
     if diff -q $target <(echo "$content") >/dev/null; then
@@ -190,7 +199,7 @@ function edit() {
   fi
 
   body=$(jq -n --arg content "$(cat $target)" '{"content": $content}')
-  result=$(curl -sf $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d "$body")
+  result=$(_curl $server/api/v1/memo/$id -H "Authorization: Bearer $token" -XPATCH -d "$body")
   echo "Edited memo $(echo $result | jq -r .id)"
 
   if [ -t 0 ]; then
@@ -219,7 +228,7 @@ function new() {
   fi
 
   body=$(jq -n --arg content "$(cat $target)" '{"content": $content}')
-  result=$(curl -sf $server/api/v1/memo -H "Authorization: Bearer $token" -XPOST -d "$body")
+  result=$(_curl $server/api/v1/memo -H "Authorization: Bearer $token" -XPOST -d "$body")
   echo "Created memo $(echo $result | jq -r .id)"
 
   if [ -t 0 ]; then
